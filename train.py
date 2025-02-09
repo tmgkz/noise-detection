@@ -1,5 +1,6 @@
 import wave
 
+import librosa
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
@@ -9,66 +10,40 @@ from PIL import Image
 import cv2
 from sklearn.model_selection import train_test_split
 
+LOAD_FILE_COUNT = 50
+
 
 def load_wav_to_nparray(file_path="fan/id_00/normal/00000000.wav") -> np.ndarray:
-    with wave.open(file_path, "rb") as wf:
-        channels = wf.getnchannels()
-        framerate = wf.getframerate()
-        n_frames = wf.getnframes()
-        buffer = wf.readframes(n_frames)
-
-    data = np.frombuffer(buffer, dtype="int16")
-
-    # ステレオ音源の場合はモノラルに変換
-    if channels == 2:
-        data = data[::2] + data[1::2]
-
-    # スペクトログラムを計算
-    frequencies, times, spectrogram_data = spectrogram(data, framerate)
-
-    fig, ax = plt.subplots()
-    ax.pcolormesh(times, frequencies, np.log10(spectrogram_data), shading="gouraud")
-    ax.set_axis_off()
-    fig.tight_layout()
-    ax.set_box_aspect(1.0)
-
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight")
-    buf.seek(0)
-    img = Image.open(buf)
-    plt.close(fig)
-
-    open_cv_image = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-    arr_resize = np.resize(open_cv_image, (470, 470))
-
-    return arr_resize
+    y, sr = librosa.load(file_path, sr=None)
+    stft = librosa.stft(y, n_fft=512, hop_length=256)
+    spectrogram = np.abs(stft)
+    log_spectrogram = librosa.power_to_db(spectrogram, ref=np.max)
+    return log_spectrogram
 
 
 if __name__ == "__main__":
-    x_positives = []
-    x_negatives = []
-    for i in range(5):
-        print(f"loading...{i+1}/50")
-        arr = load_wav_to_nparray(f"fan/id_00/normal/{str(i).zfill(8)}.wav")
-        x_positives.append(arr)
-        x_negatives.append(np.random.rand(*arr.shape))
-    x_positives = np.stack([x_positives, x_positives, x_positives], axis=-1)
-    x_negatives = np.stack([x_negatives, x_negatives, x_negatives], axis=-1)
+    positives = []
+    negatives = []
+    for i in range(LOAD_FILE_COUNT):
+        print(f"loading...{i+1}/{LOAD_FILE_COUNT}")
+        positive_arr = load_wav_to_nparray(f"fan/id_00/normal/{str(i).zfill(8)}.wav")
+        positives.append(positive_arr)
+        # negatives.append(np.random.rand(*positive_arr.shape))
+        negatives.append(
+            load_wav_to_nparray(f"fan/id_00/abnormal/{str(i).zfill(8)}.wav")
+        )
 
-    height, width = arr.shape[:2]
-    y_positive = np.zeros(x_positives.shape[0])
-    y_negative = np.ones(x_negatives.shape[0])
-    x = np.concatenate([x_positives, x_negatives], axis=0)
-    y = np.concatenate([y_positive, y_negative], axis=0)
+    positive_label = np.zeros(np.array(positives).shape[0])
+    negative_label = np.ones(np.array(negatives).shape[0])
+    x = np.concatenate((positives, negatives))
+    y = np.concatenate((positive_label, negative_label))
 
     # データの分割
     X_train, X_test, y_train, y_test = train_test_split(
         x, y, test_size=0.2, random_state=42
     )
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_train, y_train, test_size=0.25, random_state=42
-    )  # 0.25 x 0.8 = 0.2
-
+    X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], X_train.shape[2], 1)
+    X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], X_test.shape[2], 1)
     # モデルを構築
     model = tf.keras.models.Sequential(
         [
@@ -96,7 +71,6 @@ if __name__ == "__main__":
         y_train,
         epochs=epochs,
         batch_size=batch_size,
-        validation_data=(X_val, y_val),
     )
 
     # モデルを評価
@@ -104,4 +78,4 @@ if __name__ == "__main__":
     print("Test loss:", loss)
     print("Test accuracy:", accuracy)
 
-    model.save("anomaly_detection_model.h5")
+    model.save("model.h5")

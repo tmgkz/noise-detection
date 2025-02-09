@@ -1,2 +1,4 @@
-fan/*
+__pycache__/
 .venv/*
+fan/*
+model.h5
